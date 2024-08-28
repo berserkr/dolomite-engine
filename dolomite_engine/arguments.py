@@ -2,7 +2,9 @@ import logging
 from argparse import ArgumentParser
 from typing import Any
 
+import torch
 import transformers
+from packaging.version import Version
 from peft import PromptTuningInit
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
@@ -190,6 +192,9 @@ class LoadArgs(BaseArgs):
     load_experiments_tracker_state: bool = True
     # whether to load starting iteration
     load_starting_iteration: bool = True
+    # whether to resume learning rate during training
+    # this is a NO-OP if we are loading LR scheduler
+    resume_learning_rate: bool = True
 
     def model_post_init(self, __context: Any) -> None:
         _check_not_None([(self.load_path, "load_path")])
@@ -198,6 +203,9 @@ class LoadArgs(BaseArgs):
             assert (
                 not self.load_lr_scheduler
             ), "lr_scheduler loading doesn't make sense if you aren't loading optimizer"
+
+        if self.load_lr_scheduler:
+            assert self.resume_learning_rate, "resume learning rate needs to be True when reloading LR scheduler"
 
 
 class DatasetArgs(BaseArgs):
@@ -343,6 +351,24 @@ class DistributedArgs(BaseArgs):
 
         if self.sequence_parallel:
             assert self.tensor_parallel_size > 1, "tensor parallel needs to be enabled for sequence parallel"
+
+        if self.tensor_parallel_word_embeddings:
+            assert (
+                self.tensor_parallel_size > 1
+            ), "tensor parallel needs to be enabled when using tensor parallel work embeddings"
+
+        if self.tensor_parallel_size > 1:
+            version = Version(torch.__version__).release
+            version = [str(i) for i in version]
+            version = ".".join(version)
+            version = Version(version)
+
+            assert version >= Version("2.5.0"), (
+                "the current release of pytorch doesn't support tensor parallel, switch to version >= 2.5.0 "
+                "or the latest nightly"
+            )
+
+            assert self.fsdp_algorithm == 2, "FSDP-2 is required for using tensor parallel"
 
 
 class AimArgs(BaseArgs):
